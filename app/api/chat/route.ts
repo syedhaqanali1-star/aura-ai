@@ -123,9 +123,7 @@ export async function POST(request: Request) {
     });
 
     const response = await ai.models.generateContentStream({
-      model:
-        process.env.GEMINI_MODEL?.trim() ||
-        "gemini-2.5-flash",
+      model: "gemini-3.5-flash",
       contents: messages.map((message) => ({
         role:
           message.role === "assistant"
