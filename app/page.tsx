@@ -390,7 +390,7 @@ export default function Home() {
     );
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-[var(--aura-background)] text-[var(--aura-text)] transition-colors duration-200">
+    <div className="flex h-[100dvh] min-h-[100dvh] w-full overflow-hidden bg-[var(--aura-background)] text-[var(--aura-text)] transition-colors duration-200">
       <Sidebar
         isOpen={isSidebarOpen}
         onClose={() =>
@@ -428,7 +428,7 @@ export default function Home() {
         </button>
       )}
 
-      <div className="flex min-w-0 flex-1 flex-col bg-[var(--aura-background)] transition-colors duration-200">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--aura-background)] transition-colors duration-200">
         <Header
           activeView="chat"
           shareStatus={shareStatus}
