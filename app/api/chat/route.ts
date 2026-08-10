@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import Anthropic from "@anthropic-ai/sdk";
 
 import { AURA_SYSTEM_PROMPT } from "@/lib/aura-brain";
 
@@ -30,58 +30,46 @@ function isValidMessage(value: unknown): value is IncomingMessage {
 }
 
 function getErrorMessage(error: unknown): string {
-  if (!(error instanceof Error)) {
-    return "An unexpected Gemini error occurred.";
+  if (error instanceof Anthropic.APIError) {
+    if (error.status === 401) {
+      return "Your Anthropic API key is invalid.";
+    }
+
+    if (error.status === 402) {
+      return "Your Anthropic account needs billing or credits before this model can be used.";
+    }
+
+    if (error.status === 404) {
+      return "The selected Claude model could not be found.";
+    }
+
+    if (error.status === 429) {
+      return "Claude is currently rate-limited or your account usage limit has been reached. Please try again shortly.";
+    }
+
+    if (error.status === 503) {
+      return "Claude is temporarily unavailable. Please try again shortly.";
+    }
+
+    return error.message || "Claude could not complete the request.";
   }
 
-  const message = error.message.toLowerCase();
-
-  if (
-    message.includes("api key") ||
-    message.includes("unauthenticated") ||
-    message.includes("401")
-  ) {
-    return "Your Gemini API key is invalid or is not configured correctly.";
+  if (error instanceof Error) {
+    return error.message;
   }
 
-  if (
-    message.includes("quota") ||
-    message.includes("rate limit") ||
-    message.includes("429")
-  ) {
-    return "The Gemini free usage limit was reached. Please wait a little while and try again.";
-  }
-
-  if (
-    message.includes("not found") ||
-    message.includes("404")
-  ) {
-    return "The selected Gemini model could not be found.";
-  }
-
-  if (
-    message.includes("unavailable") ||
-    message.includes("503")
-  ) {
-    return "Gemini is temporarily unavailable. Please try again shortly.";
-  }
-
-  return error.message || "Gemini could not complete the request.";
+  return "An unexpected error occurred.";
 }
 
 export async function POST(request: Request) {
   try {
-    const apiKey = process.env.GEMINI_API_KEY?.trim();
+    const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
 
     if (!apiKey) {
-      console.error(
-        "GEMINI_API_KEY is not available in the deployment environment."
-      );
-
       return Response.json(
         {
           error:
-            "Aura's Gemini API key is not configured on the server. Add GEMINI_API_KEY to your Vercel environment variables and redeploy.",
+            "Aura's Anthropic API key is not configured on the server. Add ANTHROPIC_API_KEY to your environment variables and redeploy.",
         },
         {
           status: 500,
@@ -118,28 +106,20 @@ export async function POST(request: Request) {
       );
     }
 
-    const ai = new GoogleGenAI({
+    const anthropic = new Anthropic({
       apiKey,
     });
 
-    const response = await ai.models.generateContentStream({
-      model: "gemini-3.5-flash",
-      contents: messages.map((message) => ({
-        role:
-          message.role === "assistant"
-            ? "model"
-            : "user",
-        parts: [
-          {
-            text: message.content,
-          },
-        ],
+    const stream = anthropic.messages.stream({
+      model:
+        process.env.ANTHROPIC_MODEL?.trim() ||
+        "claude-sonnet-4-20250514",
+      max_tokens: 4096,
+      system: AURA_SYSTEM_PROMPT,
+      messages: messages.map((message) => ({
+        role: message.role,
+        content: message.content,
       })),
-      config: {
-        systemInstruction: AURA_SYSTEM_PROMPT,
-        temperature: 0.7,
-        maxOutputTokens: 4096,
-      },
     });
 
     const encoder = new TextEncoder();
@@ -147,20 +127,19 @@ export async function POST(request: Request) {
     const responseStream = new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
-          for await (const chunk of response) {
-            const text = chunk.text;
-
+          stream.on("text", (text) => {
             if (text) {
               controller.enqueue(
                 encoder.encode(text)
               );
             }
-          }
+          });
 
+          await stream.finalMessage();
           controller.close();
         } catch (error) {
           console.error(
-            "Aura Gemini streaming error:",
+            "Aura Claude streaming error:",
             error
           );
 
@@ -171,6 +150,14 @@ export async function POST(request: Request) {
           );
 
           controller.close();
+        }
+      },
+
+      cancel() {
+        try {
+          stream.abort();
+        } catch {
+          // Stream may already be closed.
         }
       },
     });
@@ -188,7 +175,7 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     console.error(
-      "Aura Gemini API error:",
+      "Aura Claude API error:",
       error
     );
 
@@ -197,7 +184,10 @@ export async function POST(request: Request) {
         error: getErrorMessage(error),
       },
       {
-        status: 500,
+        status:
+          error instanceof Anthropic.APIError
+            ? error.status || 500
+            : 500,
       }
     );
   }
