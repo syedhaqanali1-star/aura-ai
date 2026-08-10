@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import { InferenceClient } from "@huggingface/inference";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -8,49 +8,55 @@ type ImageRequestBody = {
 };
 
 function getErrorMessage(error: unknown): string {
-  if (!(error instanceof Error)) {
-    return "Aura could not generate the image.";
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+
+    if (
+      message.includes("401") ||
+      message.includes("unauthorized") ||
+      message.includes("token")
+    ) {
+      return "Your Hugging Face token is invalid.";
+    }
+
+    if (
+      message.includes("402") ||
+      message.includes("credit") ||
+      message.includes("billing")
+    ) {
+      return "Your Hugging Face inference credits are exhausted.";
+    }
+
+    if (
+      message.includes("429") ||
+      message.includes("rate limit")
+    ) {
+      return "Hugging Face is rate-limiting image generation. Please try again shortly.";
+    }
+
+    if (
+      message.includes("404") ||
+      message.includes("not found")
+    ) {
+      return "The selected image model could not be found.";
+    }
+
+    return error.message;
   }
 
-  const message = error.message.toLowerCase();
-
-  if (
-    message.includes("api key") ||
-    message.includes("401") ||
-    message.includes("unauthenticated")
-  ) {
-    return "Your Gemini API key is invalid.";
-  }
-
-  if (
-    message.includes("quota") ||
-    message.includes("429") ||
-    message.includes("resource exhausted") ||
-    message.includes("rate limit")
-  ) {
-    return "Gemini image generation quota has been reached.";
-  }
-
-  if (
-    message.includes("404") ||
-    message.includes("not found")
-  ) {
-    return "The Gemini image model could not be found.";
-  }
-
-  return error.message;
+  return "Aura could not generate the image.";
 }
 
 export async function POST(request: Request) {
   try {
-    const apiKey =
-      process.env.GEMINI_API_KEY?.trim();
+    const token =
+      process.env.HF_TOKEN?.trim();
 
-    if (!apiKey) {
+    if (!token) {
       return Response.json(
         {
           error:
-            "GEMINI_API_KEY is not configured.",
+            "HF_TOKEN is not configured on the server.",
         },
         {
           status: 500,
@@ -78,60 +84,45 @@ export async function POST(request: Request) {
       );
     }
 
-    const ai = new GoogleGenAI({
-      apiKey,
-    });
+    const client =
+      new InferenceClient(token);
 
-    const response =
-      await ai.models.generateContent({
+    const imageBlob =
+      await client.textToImage({
         model:
-          process.env
-            .GEMINI_IMAGE_MODEL?.trim() ||
-          "gemini-3.1-flash-image",
-
-        contents: prompt,
-
-        config: {
-          responseModalities: ["IMAGE"],
-        },
+          process.env.HF_IMAGE_MODEL?.trim() ||
+          "black-forest-labs/FLUX.1-dev",
+        inputs: prompt,
       });
 
-    const parts =
-      response.candidates?.[0]?.content
-        ?.parts ?? [];
+    const arrayBuffer =
+      await imageBlob.arrayBuffer();
 
-    for (const part of parts) {
-      if (
-        part.inlineData?.data &&
-        part.inlineData.mimeType
-      ) {
-        const imageDataUrl =
-          `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+    const base64 =
+      Buffer.from(
+        arrayBuffer
+      ).toString("base64");
 
-        return Response.json({
-          imageDataUrl,
-        });
-      }
-    }
+    const mimeType =
+      imageBlob.type ||
+      "image/png";
 
-    return Response.json(
-      {
-        error:
-          "Gemini did not return an image.",
-      },
-      {
-        status: 500,
-      }
-    );
+    const imageDataUrl =
+      `data:${mimeType};base64,${base64}`;
+
+    return Response.json({
+      imageDataUrl,
+    });
   } catch (error) {
     console.error(
-      "Aura image generation error:",
+      "Aura Hugging Face image error:",
       error
     );
 
     return Response.json(
       {
-        error: getErrorMessage(error),
+        error:
+          getErrorMessage(error),
       },
       {
         status: 500,
