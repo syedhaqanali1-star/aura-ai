@@ -1,5 +1,3 @@
-import { InferenceClient } from "@huggingface/inference";
-
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -7,62 +5,64 @@ type ImageRequestBody = {
   prompt?: string;
 };
 
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    const message = error.message.toLowerCase();
+type CloudflareResponse = {
+  result?: {
+    image?: string;
+  };
+  success?: boolean;
+  errors?: Array<{
+    message?: string;
+  }>;
+};
 
-    if (
-      message.includes("401") ||
-      message.includes("unauthorized") ||
-      message.includes("token")
-    ) {
-      return "Your Hugging Face token is invalid.";
-    }
+function getErrorMessage(
+  status: number,
+  data?: CloudflareResponse
+): string {
+  const cloudflareMessage =
+    data?.errors?.[0]?.message?.trim();
 
-    if (
-      message.includes("402") ||
-      message.includes("credit") ||
-      message.includes("billing")
-    ) {
-      return "Your Hugging Face inference credits are exhausted.";
-    }
-
-    if (
-      message.includes("429") ||
-      message.includes("rate limit")
-    ) {
-      return "Hugging Face is rate-limiting image generation. Please try again shortly.";
-    }
-
-    if (
-      message.includes("404") ||
-      message.includes("not found")
-    ) {
-      return "The selected Hugging Face image model could not be found.";
-    }
-
-    if (
-      message.includes("503") ||
-      message.includes("unavailable")
-    ) {
-      return "The Hugging Face image provider is temporarily unavailable. Please try again.";
-    }
-
-    return error.message;
+  if (status === 401) {
+    return "Your Cloudflare API token is invalid.";
   }
 
-  return "Aura could not generate the image.";
+  if (status === 403) {
+    return "Your Cloudflare API token does not have permission to use Workers AI.";
+  }
+
+  if (status === 404) {
+    return "The Cloudflare image model could not be found.";
+  }
+
+  if (status === 429) {
+    return "Cloudflare is currently rate-limiting image generation. Please try again shortly.";
+  }
+
+  if (status === 503) {
+    return "Cloudflare Workers AI is temporarily unavailable. Please try again shortly.";
+  }
+
+  return (
+    cloudflareMessage ||
+    "Aura could not generate the image."
+  );
 }
 
-export async function POST(request: Request) {
+export async function POST(
+  request: Request
+) {
   try {
-    const token = process.env.HF_TOKEN?.trim();
+    const accountId =
+      process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
 
-    if (!token) {
+    const apiToken =
+      process.env.CLOUDFLARE_API_TOKEN?.trim();
+
+    if (!accountId || !apiToken) {
       return Response.json(
         {
           error:
-            "Aura's Hugging Face token is not configured. Add HF_TOKEN to the environment variables.",
+            "Aura's Cloudflare Workers AI credentials are not configured.",
         },
         {
           status: 500,
@@ -81,7 +81,8 @@ export async function POST(request: Request) {
     if (!prompt) {
       return Response.json(
         {
-          error: "An image prompt is required.",
+          error:
+            "An image prompt is required.",
         },
         {
           status: 400,
@@ -89,46 +90,110 @@ export async function POST(request: Request) {
       );
     }
 
-    const client = new InferenceClient(token);
+    const model =
+      process.env.CLOUDFLARE_IMAGE_MODEL?.trim() ||
+      "@cf/black-forest-labs/flux-1-schnell";
 
-    const imageBlob = await client.textToImage(
-      {
-        model:
-          process.env.HF_IMAGE_MODEL?.trim() ||
-          "black-forest-labs/FLUX.1-dev",
+    const endpoint =
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${model}`;
 
-        inputs: prompt,
-      },
+    const response = await fetch(
+      endpoint,
       {
-        outputType: "blob",
+        method: "POST",
+
+        headers: {
+          Authorization:
+            `Bearer ${apiToken}`,
+
+          "Content-Type":
+            "application/json",
+        },
+
+        body: JSON.stringify({
+          prompt,
+          steps: 4,
+          seed: Math.floor(
+            Math.random() * 1_000_000
+          ),
+        }),
+
+        cache: "no-store",
       }
     );
 
-    const arrayBuffer =
-      await imageBlob.arrayBuffer();
+    let data: CloudflareResponse = {};
 
-    const base64 = Buffer.from(
-      arrayBuffer
-    ).toString("base64");
+    try {
+      data =
+        (await response.json()) as CloudflareResponse;
+    } catch {
+      data = {};
+    }
 
-    const mimeType =
-      imageBlob.type || "image/png";
+    if (!response.ok) {
+      console.error(
+        "Aura Cloudflare image API error:",
+        response.status,
+        data
+      );
+
+      return Response.json(
+        {
+          error:
+            getErrorMessage(
+              response.status,
+              data
+            ),
+        },
+        {
+          status:
+            response.status >= 400 &&
+            response.status < 600
+              ? response.status
+              : 500,
+        }
+      );
+    }
+
+    const base64Image =
+      data.result?.image;
+
+    if (!base64Image) {
+      console.error(
+        "Cloudflare did not return image data:",
+        data
+      );
+
+      return Response.json(
+        {
+          error:
+            "Cloudflare did not return a generated image.",
+        },
+        {
+          status: 500,
+        }
+      );
+    }
 
     const imageDataUrl =
-      `data:${mimeType};base64,${base64}`;
+      `data:image/jpeg;base64,${base64Image}`;
 
     return Response.json({
       imageDataUrl,
     });
   } catch (error) {
     console.error(
-      "Aura Hugging Face image generation error:",
+      "Aura Cloudflare image generation error:",
       error
     );
 
     return Response.json(
       {
-        error: getErrorMessage(error),
+        error:
+          error instanceof Error
+            ? error.message
+            : "Aura could not generate the image.",
       },
       {
         status: 500,
