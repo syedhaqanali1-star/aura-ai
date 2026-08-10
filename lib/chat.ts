@@ -9,23 +9,14 @@ export const CONVERSATIONS_STORAGE_KEY =
 export const CURRENT_CHAT_STORAGE_KEY =
   "aura-current-conversation";
 
-export function createStarterMessage(): ChatMessage {
-  return {
-    id: crypto.randomUUID(),
-    role: "aura",
-    text: "Hello! I'm Aura. How can I help you today?",
-  };
-}
-
 export function createStarterConversation(): Conversation {
   return {
     id: crypto.randomUUID(),
-    title: "New Chat",
+    title: "New chat",
+    messages: [],
     createdAt: Date.now(),
-    messages: [createStarterMessage()],
   };
 }
-
 export function createUserMessage(
   text: string
 ): ChatMessage {
