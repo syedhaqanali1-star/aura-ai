@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 
 import { AURA_SYSTEM_PROMPT } from "@/lib/aura-brain";
 
@@ -15,43 +15,55 @@ type ChatRequestBody = {
   messages?: IncomingMessage[];
 };
 
-function isValidMessage(value: unknown): value is IncomingMessage {
-  if (typeof value !== "object" || value === null) {
+function isValidMessage(
+  value: unknown
+): value is IncomingMessage {
+  if (
+    typeof value !== "object" ||
+    value === null
+  ) {
     return false;
   }
 
-  const message = value as Partial<IncomingMessage>;
+  const message =
+    value as Partial<IncomingMessage>;
 
   return (
-    (message.role === "user" || message.role === "assistant") &&
+    (message.role === "user" ||
+      message.role === "assistant") &&
     typeof message.content === "string" &&
     message.content.trim().length > 0
   );
 }
 
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Anthropic.APIError) {
+function getErrorMessage(
+  error: unknown
+): string {
+  if (error instanceof OpenAI.APIError) {
     if (error.status === 401) {
-      return "Your Anthropic API key is invalid.";
+      return "Your ZenMux API key is invalid.";
     }
 
     if (error.status === 402) {
-      return "Your Anthropic account needs billing or credits before this model can be used.";
+      return "Your ZenMux account does not have enough balance or credits for this model.";
     }
 
     if (error.status === 404) {
-      return "The selected Claude model could not be found.";
+      return "The selected ZenMux model could not be found.";
     }
 
     if (error.status === 429) {
-      return "Claude is currently rate-limited or your account usage limit has been reached. Please try again shortly.";
+      return "ZenMux is currently rate-limiting requests. Please try again shortly.";
     }
 
     if (error.status === 503) {
-      return "Claude is temporarily unavailable. Please try again shortly.";
+      return "ZenMux or the selected model provider is temporarily unavailable.";
     }
 
-    return error.message || "Claude could not complete the request.";
+    return (
+      error.message ||
+      "ZenMux could not complete the request."
+    );
   }
 
   if (error instanceof Error) {
@@ -61,15 +73,18 @@ function getErrorMessage(error: unknown): string {
   return "An unexpected error occurred.";
 }
 
-export async function POST(request: Request) {
+export async function POST(
+  request: Request
+) {
   try {
-    const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
+    const apiKey =
+      process.env.ZENMUX_API_KEY?.trim();
 
     if (!apiKey) {
       return Response.json(
         {
           error:
-            "Aura's Anthropic API key is not configured on the server. Add ANTHROPIC_API_KEY to your environment variables and redeploy.",
+            "Aura's ZenMux API key is not configured. Add ZENMUX_API_KEY to your environment variables and redeploy.",
         },
         {
           status: 500,
@@ -77,20 +92,35 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = (await request.json()) as ChatRequestBody;
+    const zenmux = new OpenAI({
+      apiKey,
+      baseURL:
+        "https://zenmux.ai/api/v1",
+    });
 
-    let messages: IncomingMessage[] = [];
+    const body =
+      (await request.json()) as ChatRequestBody;
 
-    if (Array.isArray(body.messages)) {
-      messages = body.messages.filter(isValidMessage);
+    let messages: IncomingMessage[] =
+      [];
+
+    if (
+      Array.isArray(body.messages)
+    ) {
+      messages =
+        body.messages.filter(
+          isValidMessage
+        );
     } else if (
-      typeof body.message === "string" &&
-      body.message.trim().length > 0
+      typeof body.message ===
+        "string" &&
+      body.message.trim()
     ) {
       messages = [
         {
           role: "user",
-          content: body.message.trim(),
+          content:
+            body.message.trim(),
         },
       ];
     }
@@ -98,7 +128,8 @@ export async function POST(request: Request) {
     if (messages.length === 0) {
       return Response.json(
         {
-          error: "At least one valid message is required.",
+          error:
+            "At least one valid message is required.",
         },
         {
           status: 400,
@@ -106,86 +137,108 @@ export async function POST(request: Request) {
       );
     }
 
-    const anthropic = new Anthropic({
-      apiKey,
-    });
+    const stream =
+      await zenmux.chat.completions.create(
+        {
+          model:
+            process.env
+              .ZENMUX_MODEL?.trim() ||
+            "anthropic/claude-fable-5",
 
-    const stream = anthropic.messages.stream({
-      model:
-        process.env.ANTHROPIC_MODEL?.trim() ||
-        "claude-sonnet-4-20250514",
-      max_tokens: 4096,
-      system: AURA_SYSTEM_PROMPT,
-      messages: messages.map((message) => ({
-        role: message.role,
-        content: message.content,
-      })),
-    });
+          messages: [
+            {
+              role: "system",
+              content:
+                AURA_SYSTEM_PROMPT,
+            },
 
-    const encoder = new TextEncoder();
+            ...messages.map(
+              (message) => ({
+                role: message.role,
+                content:
+                  message.content,
+              })
+            ),
+          ],
 
-    const responseStream = new ReadableStream<Uint8Array>({
-      async start(controller) {
-        try {
-          stream.on("text", (text) => {
-            if (text) {
-              controller.enqueue(
-                encoder.encode(text)
+          stream: true,
+        }
+      );
+
+    const encoder =
+      new TextEncoder();
+
+    const responseStream =
+      new ReadableStream<Uint8Array>(
+        {
+          async start(controller) {
+            try {
+              for await (const chunk of stream) {
+                const content =
+                  chunk.choices[0]
+                    ?.delta?.content;
+
+                if (content) {
+                  controller.enqueue(
+                    encoder.encode(
+                      content
+                    )
+                  );
+                }
+              }
+
+              controller.close();
+            } catch (error) {
+              console.error(
+                "Aura ZenMux streaming error:",
+                error
               );
+
+              controller.enqueue(
+                encoder.encode(
+                  `\n\nAura encountered an error: ${getErrorMessage(
+                    error
+                  )}`
+                )
+              );
+
+              controller.close();
             }
-          });
-
-          await stream.finalMessage();
-          controller.close();
-        } catch (error) {
-          console.error(
-            "Aura Claude streaming error:",
-            error
-          );
-
-          controller.enqueue(
-            encoder.encode(
-              `\n\nAura encountered an error: ${getErrorMessage(error)}`
-            )
-          );
-
-          controller.close();
+          },
         }
-      },
+      );
 
-      cancel() {
-        try {
-          stream.abort();
-        } catch {
-          // Stream may already be closed.
-        }
-      },
-    });
+    return new Response(
+      responseStream,
+      {
+        status: 200,
+        headers: {
+          "Content-Type":
+            "text/plain; charset=utf-8",
 
-    return new Response(responseStream, {
-      status: 200,
-      headers: {
-        "Content-Type":
-          "text/plain; charset=utf-8",
-        "Cache-Control":
-          "no-cache, no-transform",
-        "X-Content-Type-Options":
-          "nosniff",
-      },
-    });
+          "Cache-Control":
+            "no-cache, no-transform",
+
+          "X-Content-Type-Options":
+            "nosniff",
+        },
+      }
+    );
   } catch (error) {
     console.error(
-      "Aura Claude API error:",
+      "Aura ZenMux API error:",
       error
     );
 
     return Response.json(
       {
-        error: getErrorMessage(error),
+        error:
+          getErrorMessage(error),
       },
       {
         status:
-          error instanceof Anthropic.APIError
+          error instanceof
+          OpenAI.APIError
             ? error.status || 500
             : 500,
       }
