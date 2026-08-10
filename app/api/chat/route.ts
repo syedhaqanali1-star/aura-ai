@@ -143,7 +143,7 @@ export async function POST(
           model:
             process.env
               .NVIDIA_CHAT_MODEL?.trim() ||
-            "meta/llama-3.3-70b-instruct",
+              "meta/llama-3.1-8b-instruct",
 
           messages: [
             {
@@ -163,7 +163,7 @@ export async function POST(
 
           temperature: 0.3,
           top_p: 0.7,
-          max_tokens: 4096,
+          max_tokens: 1024,
           stream: true,
         }
       );
