@@ -347,12 +347,16 @@ export default function Home() {
     message: string,
     files: File[] = []
   ): void {
-    let messageToSend = message;
-
     const cleanedMessage =
-      messageToSend.trim();
+      message.trim();
 
-    if (!cleanedMessage) {
+    const hasFiles =
+      files.length > 0;
+
+    if (
+      !cleanedMessage &&
+      !hasFiles
+    ) {
       return;
     }
 
@@ -361,7 +365,6 @@ export default function Home() {
       files
     );
   }
-
   function handleSuggestionClick(
     message: string
   ): void {
