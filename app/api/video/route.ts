@@ -8,17 +8,20 @@ type VideoRequestBody = {
 
 type NvidiaVideoResponse = {
   b64_video?: string;
+  seed?: number;
   error?: string;
   detail?: string;
+  message?: string;
 };
 
 function getErrorMessage(
   status: number,
   data?: NvidiaVideoResponse
 ): string {
-  const serverMessage =
+  const providerMessage =
     data?.error ||
     data?.detail ||
+    data?.message ||
     "";
 
   if (status === 401) {
@@ -26,30 +29,23 @@ function getErrorMessage(
   }
 
   if (status === 403) {
-    return "Your NVIDIA account does not have access to the video model.";
+    return "Your NVIDIA account does not have access to this video endpoint.";
   }
 
   if (status === 404) {
     return "The NVIDIA Cosmos video endpoint could not be found.";
   }
 
-  if (status === 422) {
-    return (
-      serverMessage ||
-      "The video request contained an unsupported option."
-    );
-  }
-
   if (status === 429) {
-    return "NVIDIA is currently rate-limiting video generation. Please try again shortly.";
+    return "NVIDIA is currently rate-limiting video generation. Please try again later.";
   }
 
   if (status === 503) {
-    return "NVIDIA Cosmos is temporarily unavailable. Please try again shortly.";
+    return "NVIDIA Cosmos is temporarily unavailable.";
   }
 
   return (
-    serverMessage ||
+    providerMessage ||
     "Aura could not generate the video."
   );
 }
@@ -61,11 +57,26 @@ export async function POST(
     const apiKey =
       process.env.NVIDIA_API_KEY?.trim();
 
+    const endpoint =
+      process.env.NVIDIA_VIDEO_ENDPOINT?.trim();
+
     if (!apiKey) {
       return Response.json(
         {
           error:
-            "Aura's NVIDIA API key is not configured. Add NVIDIA_API_KEY to your environment variables and redeploy.",
+            "NVIDIA_API_KEY is not configured.",
+        },
+        {
+          status: 500,
+        }
+      );
+    }
+
+    if (!endpoint) {
+      return Response.json(
+        {
+          error:
+            "NVIDIA_VIDEO_ENDPOINT is not configured.",
         },
         {
           status: 500,
@@ -90,7 +101,7 @@ export async function POST(
       return Response.json(
         {
           error:
-            "A video prompt or source image is required.",
+            "A prompt or source image is required.",
         },
         {
           status: 400,
@@ -98,28 +109,30 @@ export async function POST(
       );
     }
 
-    const payload: Record<
-      string,
-      string | number | boolean
-    > = {
+    const payload: {
+      prompt: string;
+      fps: number;
+      guidance_scale: number;
+      num_output_frames: number;
+      resolution: string;
+      steps: number;
+      seed: number;
+      image?: string;
+    } = {
       prompt,
+      fps: 24,
+      guidance_scale: 6,
+      num_output_frames: 189,
+      resolution: "480",
+      steps: 35,
       seed: Math.floor(
         Math.random() * 1_000_000
       ),
-      guidance_scale: 6,
-      steps: 35,
-      resolution: "480_16_9",
-      num_output_frames: 121,
-      fps: 24,
     };
 
     if (image) {
       payload.image = image;
     }
-
-    const endpoint =
-      process.env.NVIDIA_VIDEO_ENDPOINT?.trim() ||
-      "https://ai.api.nvidia.com/v1/genai/nvidia/cosmos3-nano";
 
     const response = await fetch(
       endpoint,
@@ -154,17 +167,18 @@ export async function POST(
 
     if (!response.ok) {
       console.error(
-        "Aura NVIDIA video API error:",
+        "Aura NVIDIA video error:",
         response.status,
         data
       );
 
       return Response.json(
         {
-          error: getErrorMessage(
-            response.status,
-            data
-          ),
+          error:
+            getErrorMessage(
+              response.status,
+              data
+            ),
         },
         {
           status:
@@ -177,15 +191,10 @@ export async function POST(
     }
 
     if (!data.b64_video) {
-      console.error(
-        "NVIDIA video response did not contain b64_video:",
-        data
-      );
-
       return Response.json(
         {
           error:
-            "NVIDIA did not return a generated video.",
+            "NVIDIA did not return video data.",
         },
         {
           status: 500,
@@ -193,11 +202,9 @@ export async function POST(
       );
     }
 
-    const videoUrl =
-      `data:video/mp4;base64,${data.b64_video}`;
-
     return Response.json({
-      videoUrl,
+      videoUrl:
+        `data:video/mp4;base64,${data.b64_video}`,
     });
   } catch (error) {
     console.error(
