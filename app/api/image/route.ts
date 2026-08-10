@@ -38,7 +38,14 @@ function getErrorMessage(error: unknown): string {
       message.includes("404") ||
       message.includes("not found")
     ) {
-      return "The selected image model could not be found.";
+      return "The selected Hugging Face image model could not be found.";
+    }
+
+    if (
+      message.includes("503") ||
+      message.includes("unavailable")
+    ) {
+      return "The Hugging Face image provider is temporarily unavailable. Please try again.";
     }
 
     return error.message;
@@ -49,14 +56,13 @@ function getErrorMessage(error: unknown): string {
 
 export async function POST(request: Request) {
   try {
-    const token =
-      process.env.HF_TOKEN?.trim();
+    const token = process.env.HF_TOKEN?.trim();
 
     if (!token) {
       return Response.json(
         {
           error:
-            "HF_TOKEN is not configured on the server.",
+            "Aura's Hugging Face token is not configured. Add HF_TOKEN to the environment variables.",
         },
         {
           status: 500,
@@ -75,8 +81,7 @@ export async function POST(request: Request) {
     if (!prompt) {
       return Response.json(
         {
-          error:
-            "An image prompt is required.",
+          error: "An image prompt is required.",
         },
         {
           status: 400,
@@ -84,28 +89,30 @@ export async function POST(request: Request) {
       );
     }
 
-    const client =
-      new InferenceClient(token);
+    const client = new InferenceClient(token);
 
-    const imageBlob =
-      await client.textToImage({
+    const imageBlob = await client.textToImage(
+      {
         model:
           process.env.HF_IMAGE_MODEL?.trim() ||
           "black-forest-labs/FLUX.1-dev",
+
         inputs: prompt,
-      });
+      },
+      {
+        outputType: "blob",
+      }
+    );
 
     const arrayBuffer =
       await imageBlob.arrayBuffer();
 
-    const base64 =
-      Buffer.from(
-        arrayBuffer
-      ).toString("base64");
+    const base64 = Buffer.from(
+      arrayBuffer
+    ).toString("base64");
 
     const mimeType =
-      imageBlob.type ||
-      "image/png";
+      imageBlob.type || "image/png";
 
     const imageDataUrl =
       `data:${mimeType};base64,${base64}`;
@@ -115,14 +122,13 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     console.error(
-      "Aura Hugging Face image error:",
+      "Aura Hugging Face image generation error:",
       error
     );
 
     return Response.json(
       {
-        error:
-          getErrorMessage(error),
+        error: getErrorMessage(error),
       },
       {
         status: 500,
