@@ -35,6 +35,9 @@ export default function Message({
   const imageDataUrl =
     message?.imageDataUrl;
 
+  const videoDataUrl =
+    message?.videoDataUrl;
+
   const isUser =
     messageRole === "user";
 
@@ -78,7 +81,8 @@ export default function Message({
 
   if (
     !messageText.trim() &&
-    !imageDataUrl
+    !imageDataUrl &&
+    !videoDataUrl
   ) {
     return null;
   }
@@ -99,11 +103,12 @@ export default function Message({
             </p>
           </div>
 
-          <div className="mt-1 flex min-h-7 items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+          <div className="mt-1 flex min-h-7 items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
             <button
               type="button"
               className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--aura-text-muted)] transition hover:bg-[var(--aura-surface-hover)] hover:text-[var(--aura-text)]"
               aria-label="Edit message"
+              title="Edit message"
             >
               <Pencil size={13} />
             </button>
@@ -112,7 +117,16 @@ export default function Message({
               type="button"
               onClick={handleCopy}
               className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--aura-text-muted)] transition hover:bg-[var(--aura-surface-hover)] hover:text-[var(--aura-text)]"
-              aria-label="Copy message"
+              aria-label={
+                copied
+                  ? "Message copied"
+                  : "Copy message"
+              }
+              title={
+                copied
+                  ? "Copied"
+                  : "Copy message"
+              }
             >
               {copied ? (
                 <Check size={13} />
@@ -156,13 +170,44 @@ export default function Message({
             </div>
           )}
 
+          {videoDataUrl && (
+            <div className="mt-4 overflow-hidden rounded-2xl border border-[var(--aura-border)] bg-[var(--aura-surface)]">
+              <video
+                src={videoDataUrl}
+                controls
+                playsInline
+                className="block h-auto w-full bg-black"
+              />
+
+              <div className="flex items-center justify-end border-t border-[var(--aura-border)] p-2">
+                <a
+                  href={videoDataUrl}
+                  download="aura-generated-video.mp4"
+                  className="flex h-8 items-center gap-2 rounded-lg px-3 text-xs text-[var(--aura-text-muted)] transition hover:bg-[var(--aura-surface-hover)] hover:text-[var(--aura-text)]"
+                >
+                  <Download size={14} />
+                  Download
+                </a>
+              </div>
+            </div>
+          )}
+
           <div className="mt-2 flex min-h-8 items-center gap-0.5">
             {messageText.trim() && (
               <button
                 type="button"
                 onClick={handleCopy}
                 className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--aura-text-muted)] transition hover:bg-[var(--aura-surface-hover)] hover:text-[var(--aura-text)]"
-                aria-label="Copy response"
+                aria-label={
+                  copied
+                    ? "Response copied"
+                    : "Copy response"
+                }
+                title={
+                  copied
+                    ? "Copied"
+                    : "Copy response"
+                }
               >
                 {copied ? (
                   <Check size={14} />
@@ -176,6 +221,7 @@ export default function Message({
               type="button"
               className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--aura-text-muted)] transition hover:bg-[var(--aura-surface-hover)] hover:text-[var(--aura-text)]"
               aria-label="Regenerate response"
+              title="Regenerate response"
             >
               <RotateCcw size={14} />
             </button>

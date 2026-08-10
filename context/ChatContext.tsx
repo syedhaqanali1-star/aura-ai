@@ -12,30 +12,53 @@ import {
 } from "react";
 
 import { useProjects } from "@/context/ProjectContext";
+
 import {
   createAuraMessage,
   createStarterConversation,
   createUserMessage,
   getConversationTitle,
 } from "@/lib/chat";
+
 import type {
   ChatMessage,
   Conversation,
 } from "@/types/chat";
 
+/* =========================================================
+   TYPES
+========================================================= */
+
+type AuraIntent =
+  | "chat"
+  | "image_generation"
+  | "image_edit"
+  | "video_generation";
+
 type ChatContextType = {
   conversations: Conversation[];
+
   currentConversationId: string;
+
   currentMessages: ChatMessage[];
+
   isGenerating: boolean;
+
   createNewChat: () => void;
+
   selectConversation: (
     conversationId: string
   ) => void;
+
   deleteConversation: (
     conversationId: string
   ) => void;
-  sendMessage: (message: string) => void;
+
+  sendMessage: (
+    message: string,
+    files?: File[]
+  ) => void;
+
   stopGenerating: () => void;
 };
 
@@ -47,16 +70,173 @@ type ApiMessage = {
 type ApiErrorResponse = {
   error?: string;
 };
+
 type ImageApiResponse = {
   imageDataUrl?: string;
   error?: string;
 };
+
+type VideoApiResponse = {
+  videoUrl?: string;
+  error?: string;
+};
+
+/* =========================================================
+   CONTEXT
+========================================================= */
+
 const ChatContext =
-  createContext<ChatContextType | null>(null);
+  createContext<ChatContextType | null>(
+    null
+  );
+
+/* =========================================================
+   INTENT ROUTER
+========================================================= */
+
+function detectAuraIntent(
+  message: string,
+  files: File[] = []
+): AuraIntent {
+  const normalized = message
+    .toLowerCase()
+    .trim();
+
+  const hasImageFile = files.some(
+    (file) =>
+      file.type.startsWith("image/")
+  );
+
+  /* -----------------------------
+     IMAGE EDIT
+  ----------------------------- */
+
+  if (hasImageFile) {
+    const imageEditPatterns = [
+      /\b(edit|change|modify|fix|enhance|retouch|restore|improve|clean up)\b/,
+
+      /\b(remove|erase|delete|get rid of)\b/,
+
+      /\b(add|insert|put|place)\b/,
+
+      /\b(replace|swap|switch)\b/,
+
+      /\b(change|make|turn)\b.*\b(color|colour|background|sky|shirt|car|hair|eyes|face|clothes)\b/,
+
+      /\b(make|turn|convert)\b.*\b(anime|cartoon|realistic|cinematic|3d|painting|sketch)\b/,
+
+      /\bbackground\b.*\b(remove|replace|change|blur)\b/,
+
+      /\b(upscale|sharpen|denoise|restore)\b/,
+
+      /\b(make this|change this|edit this|fix this|remove this)\b/,
+    ];
+
+    const isEditRequest =
+      imageEditPatterns.some(
+        (pattern) =>
+          pattern.test(normalized)
+      );
+
+    if (isEditRequest) {
+      return "image_edit";
+    }
+  }
+
+  /* -----------------------------
+     VIDEO GENERATION
+  ----------------------------- */
+
+  const videoPatterns = [
+    /\b(generate|create|make|produce|render)\b.*\b(video|clip|animation|movie|cinematic)\b/,
+
+    /\b(video|clip|animation)\b.*\b(of|showing|with|featuring|about)\b/,
+
+    /\banimate this\b/,
+
+    /\banimate the image\b/,
+
+    /\bturn this into a video\b/,
+
+    /\bmake this move\b/,
+
+    /\bbring this image to life\b/,
+
+    /\bcreate a short film\b/,
+
+    /\bmake a short film\b/,
+
+    /\btext to video\b/,
+
+    /\bimage to video\b/,
+  ];
+
+  const isVideoRequest =
+    videoPatterns.some(
+      (pattern) =>
+        pattern.test(normalized)
+    );
+
+  if (isVideoRequest) {
+    return "video_generation";
+  }
+
+  /* -----------------------------
+     IMAGE GENERATION
+  ----------------------------- */
+
+  const imagePatterns = [
+    /\b(generate|create|make|draw|design|render|illustrate|visualize)\b.*\b(image|photo|picture|art|artwork|poster|logo|wallpaper|portrait|scene|illustration|graphic)\b/,
+
+    /\b(image|photo|picture|art|artwork|poster|logo|wallpaper|portrait|illustration|graphic)\b.*\b(of|for|showing|with|featuring)\b/,
+
+    /\bturn (this|that|it)\b.*\binto\b.*\b(image|photo|picture|art|illustration|poster)\b/,
+
+    /\bcan you draw\b/,
+
+    /\bdraw me\b/,
+
+    /\bpaint me\b/,
+
+    /\bcan you make me\b.*\b(photo|picture|image|poster|logo|art|wallpaper)\b/,
+
+    /\bi want\b.*\b(photo|picture|image|poster|logo|wallpaper|portrait|artwork)\b/,
+
+    /\bshow me\b.*\b(as an image|as a picture|as a photo|visually)\b/,
+
+    /\bcreate artwork\b/,
+
+    /\bdesign a logo\b/,
+
+    /\bdesign a poster\b/,
+
+    /\bmake a wallpaper\b/,
+
+    /\bmake me look like\b/,
+
+    /\bwhat would\b.*\blook like\b.*\b(image|picture|photo|visually)\b/,
+  ];
+
+  const isImageRequest =
+    imagePatterns.some(
+      (pattern) =>
+        pattern.test(normalized)
+    );
+
+  if (isImageRequest) {
+    return "image_generation";
+  }
+
+  return "chat";
+}
+
+/* =========================================================
+   HELPERS
+========================================================= */
 
 function createErrorMessage(
   error: unknown
-) {
+): string {
   if (
     error instanceof DOMException &&
     error.name === "AbortError"
@@ -79,6 +259,8 @@ function convertMessagesForApi(
       (message) =>
         (message.role === "user" ||
           message.role === "aura") &&
+        typeof message.text ===
+          "string" &&
         message.text.trim().length > 0
     )
     .map((message) => ({
@@ -86,31 +268,15 @@ function convertMessagesForApi(
         message.role === "user"
           ? "user"
           : "assistant",
-      content: message.text.trim(),
+
+      content:
+        message.text.trim(),
     }));
 }
 
-function isImageGenerationRequest(message: string): boolean {
-  const normalized = message.toLowerCase().trim();
-
-  const imagePhrases = [
-    "generate an image",
-    "generate a photo",
-    "generate a picture",
-    "create an image",
-    "create a photo",
-    "create a picture",
-    "make an image",
-    "make a photo",
-    "make a picture",
-    "draw an image",
-    "draw a picture",
-  ];
-
-  return imagePhrases.some((phrase) =>
-    normalized.includes(phrase)
-  );
-}
+/* =========================================================
+   PROVIDER
+========================================================= */
 
 export function ChatProvider({
   children,
@@ -129,8 +295,10 @@ export function ChatProvider({
     setCurrentConversationId,
   ] = useState("");
 
-  const [isGenerating, setIsGenerating] =
-    useState(false);
+  const [
+    isGenerating,
+    setIsGenerating,
+  ] = useState(false);
 
   const conversations =
     currentProject?.conversations ?? [];
@@ -148,10 +316,16 @@ export function ChatProvider({
     useRef<string | null>(null);
 
   const abortControllerRef =
-    useRef<AbortController | null>(null);
+    useRef<AbortController | null>(
+      null
+    );
 
   const activeGenerationIdRef =
     useRef(0);
+
+  /* =======================================================
+     REF SYNCHRONIZATION
+  ======================================================= */
 
   useEffect(() => {
     conversationsRef.current =
@@ -168,13 +342,22 @@ export function ChatProvider({
       currentConversationId;
   }, [currentConversationId]);
 
+  /* =======================================================
+     STOP GENERATION
+  ======================================================= */
+
   const stopGenerating =
     useCallback(() => {
-      activeGenerationIdRef.current += 1;
+      activeGenerationIdRef.current +=
+        1;
 
-      if (abortControllerRef.current) {
+      if (
+        abortControllerRef.current
+      ) {
         abortControllerRef.current.abort();
-        abortControllerRef.current = null;
+
+        abortControllerRef.current =
+          null;
       }
 
       setIsGenerating(false);
@@ -182,12 +365,19 @@ export function ChatProvider({
 
   useEffect(() => {
     return () => {
-      activeGenerationIdRef.current += 1;
+      activeGenerationIdRef.current +=
+        1;
 
       abortControllerRef.current?.abort();
-      abortControllerRef.current = null;
+
+      abortControllerRef.current =
+        null;
     };
   }, []);
+
+  /* =======================================================
+     PROJECT / CONVERSATION INITIALIZATION
+  ======================================================= */
 
   useEffect(() => {
     if (
@@ -208,7 +398,9 @@ export function ChatProvider({
       stopGenerating();
     }
 
-    if (conversations.length === 0) {
+    if (
+      conversations.length === 0
+    ) {
       const starterConversation =
         createStarterConversation();
 
@@ -260,6 +452,10 @@ export function ChatProvider({
     updateProjectConversations,
   ]);
 
+  /* =======================================================
+     CURRENT CONVERSATION
+  ======================================================= */
+
   const currentConversation =
     useMemo(() => {
       return (
@@ -276,6 +472,10 @@ export function ChatProvider({
 
   const currentMessages =
     currentConversation?.messages ?? [];
+
+  /* =======================================================
+     SAVE CONVERSATIONS
+  ======================================================= */
 
   const saveConversations =
     useCallback(
@@ -304,8 +504,14 @@ export function ChatProvider({
           nextConversations
         );
       },
-      [updateProjectConversations]
+      [
+        updateProjectConversations,
+      ]
     );
+
+  /* =======================================================
+     UPDATE ASSISTANT TEXT
+  ======================================================= */
 
   const updateAssistantMessage =
     useCallback(
@@ -336,6 +542,7 @@ export function ChatProvider({
 
               return {
                 ...conversation,
+
                 messages:
                   conversation.messages.map(
                     (message) => {
@@ -348,6 +555,7 @@ export function ChatProvider({
 
                       return {
                         ...message,
+
                         text: updater(
                           message.text
                         ),
@@ -365,13 +573,17 @@ export function ChatProvider({
       },
       [saveConversations]
     );
-  const updateAssistantImage =
+
+  /* =======================================================
+     UPDATE ASSISTANT IMAGE
+  ======================================================= */
+  const updateAssistantVideo =
   useCallback(
     (
       projectId: string,
       conversationId: string,
       messageId: string,
-      imageDataUrl: string
+      videoDataUrl: string
     ) => {
       if (
         currentProjectIdRef.current !==
@@ -404,7 +616,7 @@ export function ChatProvider({
 
                     return {
                       ...message,
-                      imageDataUrl,
+                      videoDataUrl,
                     };
                   }
                 ),
@@ -419,7 +631,66 @@ export function ChatProvider({
     },
     [saveConversations]
   );
-  
+  const updateAssistantImage =
+    useCallback(
+      (
+        projectId: string,
+        conversationId: string,
+        messageId: string,
+        imageDataUrl: string
+      ) => {
+        if (
+          currentProjectIdRef.current !==
+          projectId
+        ) {
+          return;
+        }
+
+        const nextConversations =
+          conversationsRef.current.map(
+            (conversation) => {
+              if (
+                conversation.id !==
+                conversationId
+              ) {
+                return conversation;
+              }
+
+              return {
+                ...conversation,
+
+                messages:
+                  conversation.messages.map(
+                    (message) => {
+                      if (
+                        message.id !==
+                        messageId
+                      ) {
+                        return message;
+                      }
+
+                      return {
+                        ...message,
+                        imageDataUrl,
+                      };
+                    }
+                  ),
+              };
+            }
+          );
+
+        saveConversations(
+          nextConversations,
+          projectId
+        );
+      },
+      [saveConversations]
+    );
+
+  /* =======================================================
+     REMOVE MESSAGE
+  ======================================================= */
+
   const removeMessage =
     useCallback(
       (
@@ -446,10 +717,12 @@ export function ChatProvider({
 
               return {
                 ...conversation,
+
                 messages:
                   conversation.messages.filter(
                     (message) =>
-                      message.id !== messageId
+                      message.id !==
+                      messageId
                   ),
               };
             }
@@ -462,6 +735,10 @@ export function ChatProvider({
       },
       [saveConversations]
     );
+
+  /* =======================================================
+     CREATE NEW CHAT
+  ======================================================= */
 
   const createNewChat =
     useCallback(() => {
@@ -479,11 +756,14 @@ export function ChatProvider({
           (conversation) =>
             !conversation.messages.some(
               (message) =>
-                message.role === "user"
+                message.role ===
+                "user"
             )
         );
 
-      if (existingEmptyConversation) {
+      if (
+        existingEmptyConversation
+      ) {
         currentConversationIdRef.current =
           existingEmptyConversation.id;
 
@@ -518,9 +798,15 @@ export function ChatProvider({
       stopGenerating,
     ]);
 
+  /* =======================================================
+     SELECT CONVERSATION
+  ======================================================= */
+
   const selectConversation =
     useCallback(
-      (conversationId: string) => {
+      (
+        conversationId: string
+      ) => {
         const conversationExists =
           conversationsRef.current.some(
             (conversation) =>
@@ -544,9 +830,15 @@ export function ChatProvider({
       [stopGenerating]
     );
 
+  /* =======================================================
+     DELETE CONVERSATION
+  ======================================================= */
+
   const deleteConversation =
     useCallback(
-      (conversationId: string) => {
+      (
+        conversationId: string
+      ) => {
         stopGenerating();
 
         const projectId =
@@ -595,7 +887,8 @@ export function ChatProvider({
           conversationId
         ) {
           const nextConversationId =
-            remainingConversations[0].id;
+            remainingConversations[0]
+              .id;
 
           currentConversationIdRef.current =
             nextConversationId;
@@ -611,11 +904,41 @@ export function ChatProvider({
       ]
     );
 
+  /* =======================================================
+     SEND MESSAGE
+  ======================================================= */
+
   const sendMessage =
     useCallback(
-      async (message: string) => {
+      async (
+        message: string,
+        files: File[] = []
+      ) => {
         const cleanedMessage =
           message.trim();
+
+        const intent =
+          detectAuraIntent(
+            cleanedMessage,
+            files
+          );
+
+        console.log(
+          "[Aura Router]",
+          {
+            intent,
+
+            message:
+              cleanedMessage,
+
+            files: files.map(
+              (file) => ({
+                name: file.name,
+                type: file.type,
+              })
+            ),
+          }
+        );
 
         const projectId =
           currentProjectIdRef.current;
@@ -639,7 +962,9 @@ export function ChatProvider({
               conversationId
           );
 
-        if (!selectedConversation) {
+        if (
+          !selectedConversation
+        ) {
           return;
         }
 
@@ -654,7 +979,8 @@ export function ChatProvider({
         const isFirstUserMessage =
           !selectedConversation.messages.some(
             (chatMessage) =>
-              chatMessage.role === "user"
+              chatMessage.role ===
+              "user"
           );
 
         const messagesForApi =
@@ -666,11 +992,14 @@ export function ChatProvider({
         const updatedConversation: Conversation =
           {
             ...selectedConversation,
-            title: isFirstUserMessage
-              ? getConversationTitle(
-                  cleanedMessage
-                )
-              : selectedConversation.title,
+
+            title:
+              isFirstUserMessage
+                ? getConversationTitle(
+                    cleanedMessage
+                  )
+                : selectedConversation.title,
+
             messages: [
               ...selectedConversation.messages,
               userMessage,
@@ -680,6 +1009,7 @@ export function ChatProvider({
 
         const nextConversations = [
           updatedConversation,
+
           ...conversationsRef.current.filter(
             (conversation) =>
               conversation.id !==
@@ -693,7 +1023,8 @@ export function ChatProvider({
         );
 
         const generationId =
-          activeGenerationIdRef.current + 1;
+          activeGenerationIdRef.current +
+          1;
 
         activeGenerationIdRef.current =
           generationId;
@@ -707,25 +1038,35 @@ export function ChatProvider({
         setIsGenerating(true);
 
         try {
+          /* ===============================================
+             IMAGE GENERATION
+          =============================================== */
+
           if (
-            isImageGenerationRequest(
-              cleanedMessage
-            )
+            intent ===
+            "image_generation"
           ) {
-            const response = await fetch(
-              "/api/image",
-              {
-                method: "POST",
-                headers: {
-                  "Content-Type":
-                    "application/json",
-                },
-                body: JSON.stringify({
-                  prompt: cleanedMessage,
-                }),
-                signal: controller.signal,
-              }
-            );
+            const response =
+              await fetch(
+                "/api/image",
+                {
+                  method: "POST",
+
+                  headers: {
+                    "Content-Type":
+                      "application/json",
+                  },
+
+                  body:
+                    JSON.stringify({
+                      prompt:
+                        cleanedMessage,
+                    }),
+
+                  signal:
+                    controller.signal,
+                }
+              );
 
             const data =
               (await response.json()) as ImageApiResponse;
@@ -737,9 +1078,11 @@ export function ChatProvider({
               );
             }
 
-            if (!data.imageDataUrl) {
+            if (
+              !data.imageDataUrl
+            ) {
               throw new Error(
-                "Aura did not receive an image from Gemini."
+                "Aura did not receive an image from the image model."
               );
             }
 
@@ -747,7 +1090,8 @@ export function ChatProvider({
               projectId,
               conversationId,
               assistantMessage.id,
-              () => "Here’s the image I generated:"
+              () =>
+                "Here’s the image I generated:"
             );
 
             updateAssistantImage(
@@ -760,20 +1104,111 @@ export function ChatProvider({
             return;
           }
 
-          const response = await fetch(
-            "/api/chat",
-            {
-              method: "POST",
-              headers: {
-                "Content-Type":
-                  "application/json",
-              },
-              body: JSON.stringify({
-                messages: messagesForApi,
-              }),
-              signal: controller.signal,
+          /* ===============================================
+             VIDEO GENERATION
+          =============================================== */
+
+          if (
+            intent ===
+            "video_generation"
+          ) {
+            const response =
+              await fetch(
+                "/api/video",
+                {
+                  method: "POST",
+
+                  headers: {
+                    "Content-Type":
+                      "application/json",
+                  },
+
+                  body:
+                    JSON.stringify({
+                      prompt:
+                        cleanedMessage,
+                    }),
+
+                  signal:
+                    controller.signal,
+                }
+              );
+
+            const data =
+              (await response.json()) as VideoApiResponse;
+
+            if (!response.ok) {
+              throw new Error(
+                data.error ||
+                  "Aura could not generate the video."
+              );
             }
-          );
+
+            if (!data.videoUrl) {
+              throw new Error(
+                "Aura did not receive a video from the video model."
+              );
+            }
+
+updateAssistantMessage(
+  projectId,
+  conversationId,
+  assistantMessage.id,
+  () => "Here’s the video I generated:"
+);
+
+            updateAssistantVideo(
+              projectId,
+              conversationId,
+              assistantMessage.id,
+              data.videoUrl
+            );
+            return;
+          }
+
+          /* ===============================================
+             IMAGE EDIT
+          =============================================== */
+
+          if (
+            intent === "image_edit"
+          ) {
+            updateAssistantMessage(
+              projectId,
+              conversationId,
+              assistantMessage.id,
+              () =>
+                "I understand that you want to edit the uploaded image. Aura's image-editing model is being connected next."
+            );
+
+            return;
+          }
+
+          /* ===============================================
+             NORMAL CHAT
+          =============================================== */
+
+          const response =
+            await fetch(
+              "/api/chat",
+              {
+                method: "POST",
+
+                headers: {
+                  "Content-Type":
+                    "application/json",
+                },
+
+                body:
+                  JSON.stringify({
+                    messages:
+                      messagesForApi,
+                  }),
+
+                signal:
+                  controller.signal,
+              }
+            );
 
           if (!response.ok) {
             let errorMessage =
@@ -797,7 +1232,9 @@ export function ChatProvider({
                 errorMessage;
             }
 
-            throw new Error(errorMessage);
+            throw new Error(
+              errorMessage
+            );
           }
 
           if (!response.body) {
@@ -815,7 +1252,10 @@ export function ChatProvider({
           let receivedText = false;
 
           while (true) {
-            const { done, value } =
+            const {
+              done,
+              value,
+            } =
               await reader.read();
 
             if (
@@ -823,6 +1263,7 @@ export function ChatProvider({
               generationId
             ) {
               await reader.cancel();
+
               return;
             }
 
@@ -830,12 +1271,13 @@ export function ChatProvider({
               break;
             }
 
-            const chunk = decoder.decode(
-              value,
-              {
-                stream: true,
-              }
-            );
+            const chunk =
+              decoder.decode(
+                value,
+                {
+                  stream: true,
+                }
+              );
 
             if (!chunk) {
               continue;
@@ -847,8 +1289,11 @@ export function ChatProvider({
               projectId,
               conversationId,
               assistantMessage.id,
-              (currentText) =>
-                currentText + chunk
+              (
+                currentText
+              ) =>
+                currentText +
+                chunk
             );
           }
 
@@ -862,8 +1307,11 @@ export function ChatProvider({
               projectId,
               conversationId,
               assistantMessage.id,
-              (currentText) =>
-                currentText + finalChunk
+              (
+                currentText
+              ) =>
+                currentText +
+                finalChunk
             );
           }
 
@@ -874,23 +1322,33 @@ export function ChatProvider({
           }
         } catch (error) {
           const errorMessage =
-            createErrorMessage(error);
+            createErrorMessage(
+              error
+            );
 
           if (!errorMessage) {
             const assistantStillEmpty =
               conversationsRef.current
                 .find(
-                  (conversation) =>
+                  (
+                    conversation
+                  ) =>
                     conversation.id ===
                     conversationId
                 )
                 ?.messages.find(
-                  (chatMessage) =>
+                  (
+                    chatMessage
+                  ) =>
                     chatMessage.id ===
                     assistantMessage.id
-                )?.text.trim().length === 0;
+                )
+                ?.text.trim()
+                .length === 0;
 
-            if (assistantStillEmpty) {
+            if (
+              assistantStillEmpty
+            ) {
               removeMessage(
                 projectId,
                 conversationId,
@@ -905,8 +1363,12 @@ export function ChatProvider({
             projectId,
             conversationId,
             assistantMessage.id,
-            (currentText) => {
-              if (currentText.trim()) {
+            (
+              currentText
+            ) => {
+              if (
+                currentText.trim()
+              ) {
                 return `${currentText}\n\n---\n\n**Error:** ${errorMessage}`;
               }
 
@@ -921,7 +1383,9 @@ export function ChatProvider({
             abortControllerRef.current =
               null;
 
-            setIsGenerating(false);
+            setIsGenerating(
+              false
+            );
           }
         }
       },
@@ -934,19 +1398,32 @@ export function ChatProvider({
       ]
     );
 
+  /* =======================================================
+     CONTEXT VALUE
+  ======================================================= */
+
   const contextValue =
     useMemo<ChatContextType>(
       () => ({
         conversations,
+
         currentConversationId,
+
         currentMessages,
+
         isGenerating,
+
         createNewChat,
+
         selectConversation,
+
         deleteConversation,
+
         sendMessage,
+
         stopGenerating,
       }),
+
       [
         conversations,
         currentConversationId,
@@ -968,6 +1445,10 @@ export function ChatProvider({
     </ChatContext.Provider>
   );
 }
+
+/* =========================================================
+   HOOK
+========================================================= */
 
 export function useChat() {
   const context =

@@ -349,19 +349,6 @@ export default function Home() {
   ): void {
     let messageToSend = message;
 
-    if (files.length > 0) {
-      const fileList = files
-        .map(
-          (file) =>
-            `• ${file.name}`
-        )
-        .join("\n");
-
-      messageToSend = message
-        ? `${message}\n\nAttached files:\n${fileList}`
-        : `Attached files:\n${fileList}`;
-    }
-
     const cleanedMessage =
       messageToSend.trim();
 
@@ -369,7 +356,10 @@ export default function Home() {
       return;
     }
 
-    sendMessage(cleanedMessage);
+    sendMessage(
+      cleanedMessage,
+      files
+    );
   }
 
   function handleSuggestionClick(

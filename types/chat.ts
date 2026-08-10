@@ -3,6 +3,7 @@ export type ChatMessage = {
   role: "user" | "aura";
   text: string;
   imageDataUrl?: string;
+  videoDataUrl?: string;
 };
 
 export type Conversation = {

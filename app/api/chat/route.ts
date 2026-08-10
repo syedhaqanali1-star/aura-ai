@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import OpenAI from "openai";
 
 import { AURA_SYSTEM_PROMPT } from "@/lib/aura-brain";
 
@@ -15,70 +15,76 @@ type ChatRequestBody = {
   messages?: IncomingMessage[];
 };
 
-function isValidMessage(value: unknown): value is IncomingMessage {
-  if (typeof value !== "object" || value === null) {
+function isValidMessage(
+  value: unknown
+): value is IncomingMessage {
+  if (
+    typeof value !== "object" ||
+    value === null
+  ) {
     return false;
   }
 
-  const message = value as Partial<IncomingMessage>;
+  const message =
+    value as Partial<IncomingMessage>;
 
   return (
-    (message.role === "user" || message.role === "assistant") &&
+    (message.role === "user" ||
+      message.role === "assistant") &&
     typeof message.content === "string" &&
     message.content.trim().length > 0
   );
 }
 
-function getErrorMessage(error: unknown): string {
-  if (!(error instanceof Error)) {
-    return "An unexpected Gemini error occurred.";
+function getErrorMessage(
+  error: unknown
+): string {
+  if (error instanceof OpenAI.APIError) {
+    if (error.status === 401) {
+      return "Your NVIDIA API key is invalid.";
+    }
+
+    if (error.status === 402) {
+      return "Your NVIDIA API account does not currently have access to this model.";
+    }
+
+    if (error.status === 404) {
+      return "The selected NVIDIA model could not be found.";
+    }
+
+    if (error.status === 429) {
+      return "NVIDIA is currently rate-limiting Aura. Please try again shortly.";
+    }
+
+    if (error.status === 503) {
+      return "NVIDIA's AI service is temporarily unavailable. Please try again shortly.";
+    }
+
+    return (
+      error.message ||
+      "NVIDIA could not complete the request."
+    );
   }
 
-  const message = error.message.toLowerCase();
-
-  if (
-    message.includes("api key") ||
-    message.includes("unauthenticated") ||
-    message.includes("401")
-  ) {
-    return "Your Gemini API key is invalid.";
+  if (error instanceof Error) {
+    return error.message;
   }
 
-  if (
-    message.includes("quota") ||
-    message.includes("resource exhausted") ||
-    message.includes("rate limit") ||
-    message.includes("429")
-  ) {
-    return "Gemini is currently rate-limited or your usage quota has been reached. Please try again shortly.";
-  }
-
-  if (
-    message.includes("not found") ||
-    message.includes("404")
-  ) {
-    return "The selected Gemini model could not be found.";
-  }
-
-  if (
-    message.includes("unavailable") ||
-    message.includes("503")
-  ) {
-    return "Gemini is temporarily unavailable. Please try again shortly.";
-  }
-
-  return error.message || "Gemini could not complete the request.";
+  return "An unexpected error occurred.";
 }
 
-export async function POST(request: Request) {
+export async function POST(
+  request: Request
+) {
   try {
-    const apiKey = process.env.GEMINI_API_KEY?.trim();
+    const apiKey =
+      process.env.NVIDIA_API_KEY?.trim();
 
     if (!apiKey) {
       return Response.json(
         {
           error:
-            "Aura's Gemini API key is not configured. Add GEMINI_API_KEY to your environment variables and redeploy.",
+            "Aura's NVIDIA API key is not configured. Add NVIDIA_API_KEY to your environment variables and redeploy.",
         },
         {
           status: 500,
@@ -86,20 +92,29 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = (await request.json()) as ChatRequestBody;
+    const body =
+      (await request.json()) as ChatRequestBody;
 
-    let messages: IncomingMessage[] = [];
+    let messages: IncomingMessage[] =
+      [];
 
-    if (Array.isArray(body.messages)) {
-      messages = body.messages.filter(isValidMessage);
+    if (
+      Array.isArray(body.messages)
+    ) {
+      messages =
+        body.messages.filter(
+          isValidMessage
+        );
     } else if (
-      typeof body.message === "string" &&
-      body.message.trim().length > 0
+      typeof body.message ===
+        "string" &&
+      body.message.trim()
     ) {
       messages = [
         {
           role: "user",
-          content: body.message.trim(),
+          content:
+            body.message.trim(),
         },
       ];
     }
@@ -107,7 +122,8 @@ export async function POST(request: Request) {
     if (messages.length === 0) {
       return Response.json(
         {
-          error: "At least one valid message is required.",
+          error:
+            "At least one valid message is required.",
         },
         {
           status: 400,
@@ -115,89 +131,120 @@ export async function POST(request: Request) {
       );
     }
 
-    const ai = new GoogleGenAI({
+    const nvidia = new OpenAI({
       apiKey,
+      baseURL:
+        "https://integrate.api.nvidia.com/v1",
     });
 
-    const response = await ai.models.generateContentStream({
-      model:
-        process.env.GEMINI_MODEL?.trim() ||
-        "gemini-3.6-flash",
+    const stream =
+      await nvidia.chat.completions.create(
+        {
+          model:
+            process.env
+              .NVIDIA_CHAT_MODEL?.trim() ||
+            "meta/llama-3.3-70b-instruct",
 
-      contents: messages.map((message) => ({
-        role:
-          message.role === "assistant"
-            ? "model"
-            : "user",
-        parts: [
-          {
-            text: message.content,
-          },
-        ],
-      })),
+          messages: [
+            {
+              role: "system",
+              content:
+                AURA_SYSTEM_PROMPT,
+            },
 
-      config: {
-        systemInstruction: AURA_SYSTEM_PROMPT,
-        maxOutputTokens: 4096,
-      },
-    });
+            ...messages.map(
+              (message) => ({
+                role: message.role,
+                content:
+                  message.content,
+              })
+            ),
+          ],
 
-    const encoder = new TextEncoder();
-
-    const responseStream = new ReadableStream<Uint8Array>({
-      async start(controller) {
-        try {
-          for await (const chunk of response) {
-            const text = chunk.text;
-
-            if (text) {
-              controller.enqueue(
-                encoder.encode(text)
-              );
-            }
-          }
-
-          controller.close();
-        } catch (error) {
-          console.error(
-            "Aura Gemini streaming error:",
-            error
-          );
-
-          controller.enqueue(
-            encoder.encode(
-              `\n\nAura encountered an error: ${getErrorMessage(error)}`
-            )
-          );
-
-          controller.close();
+          temperature: 0.3,
+          top_p: 0.7,
+          max_tokens: 4096,
+          stream: true,
         }
-      },
-    });
+      );
 
-    return new Response(responseStream, {
-      status: 200,
-      headers: {
-        "Content-Type":
-          "text/plain; charset=utf-8",
-        "Cache-Control":
-          "no-cache, no-transform",
-        "X-Content-Type-Options":
-          "nosniff",
-      },
-    });
+    const encoder =
+      new TextEncoder();
+
+    const responseStream =
+      new ReadableStream<Uint8Array>(
+        {
+          async start(controller) {
+            try {
+              for await (const chunk of stream) {
+                const content =
+                  chunk.choices[0]
+                    ?.delta?.content;
+
+                if (content) {
+                  controller.enqueue(
+                    encoder.encode(
+                      content
+                    )
+                  );
+                }
+              }
+
+              controller.close();
+            } catch (error) {
+              console.error(
+                "Aura NVIDIA streaming error:",
+                error
+              );
+
+              controller.enqueue(
+                encoder.encode(
+                  `\n\nAura encountered an error: ${getErrorMessage(
+                    error
+                  )}`
+                )
+              );
+
+              controller.close();
+            }
+          },
+        }
+      );
+
+    return new Response(
+      responseStream,
+      {
+        status: 200,
+
+        headers: {
+          "Content-Type":
+            "text/plain; charset=utf-8",
+
+          "Cache-Control":
+            "no-cache, no-transform",
+
+          "X-Content-Type-Options":
+            "nosniff",
+        },
+      }
+    );
   } catch (error) {
     console.error(
-      "Aura Gemini API error:",
+      "Aura NVIDIA API error:",
       error
     );
 
     return Response.json(
       {
-        error: getErrorMessage(error),
+        error:
+          getErrorMessage(error),
       },
       {
-        status: 500,
+        status:
+          error instanceof
+          OpenAI.APIError
+            ? error.status || 500
+            : 500,
       }
     );
   }
