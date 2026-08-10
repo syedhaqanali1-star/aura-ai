@@ -1,53 +1,60 @@
+import {
+  experimental_generateVideo as generateVideo,
+  NoVideoGeneratedError,
+} from "ai";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+export const maxDuration = 300;
+
 type VideoRequestBody = {
   prompt?: string;
-  image?: string;
-};
-
-type NvidiaVideoResponse = {
-  b64_video?: string;
-  seed?: number;
-  error?: string;
-  detail?: string;
-  message?: string;
 };
 
 function getErrorMessage(
-  status: number,
-  data?: NvidiaVideoResponse
+  error: unknown
 ): string {
-  const providerMessage =
-    data?.error ||
-    data?.detail ||
-    data?.message ||
-    "";
-
-  if (status === 401) {
-    return "Your NVIDIA API key is invalid.";
+  if (
+    NoVideoGeneratedError.isInstance(
+      error
+    )
+  ) {
+    return "The video model did not return a video.";
   }
 
-  if (status === 403) {
-    return "Your NVIDIA account does not have access to this video endpoint.";
+  if (error instanceof Error) {
+    const message =
+      error.message.toLowerCase();
+
+    if (
+      message.includes("api key") ||
+      message.includes("unauthorized") ||
+      message.includes("401")
+    ) {
+      return "Your Vercel AI Gateway API key is invalid.";
+    }
+
+    if (
+      message.includes("payment") ||
+      message.includes("billing") ||
+      message.includes("credits") ||
+      message.includes("402")
+    ) {
+      return "Video generation requires AI Gateway billing or available credits.";
+    }
+
+    if (
+      message.includes("rate limit") ||
+      message.includes("429")
+    ) {
+      return "Video generation is currently rate-limited. Please try again shortly.";
+    }
+
+    return error.message;
   }
 
-  if (status === 404) {
-    return "The NVIDIA Cosmos video endpoint could not be found.";
-  }
-
-  if (status === 429) {
-    return "NVIDIA is currently rate-limiting video generation. Please try again later.";
-  }
-
-  if (status === 503) {
-    return "NVIDIA Cosmos is temporarily unavailable.";
-  }
-
-  return (
-    providerMessage ||
-    "Aura could not generate the video."
-  );
+  return "Aura could not generate the video.";
 }
 
 export async function POST(
@@ -55,28 +62,14 @@ export async function POST(
 ) {
   try {
     const apiKey =
-      process.env.NVIDIA_API_KEY?.trim();
-
-    const endpoint =
-      process.env.NVIDIA_VIDEO_ENDPOINT?.trim();
+      process.env
+        .AI_GATEWAY_API_KEY?.trim();
 
     if (!apiKey) {
       return Response.json(
         {
           error:
-            "NVIDIA_API_KEY is not configured.",
-        },
-        {
-          status: 500,
-        }
-      );
-    }
-
-    if (!endpoint) {
-      return Response.json(
-        {
-          error:
-            "NVIDIA_VIDEO_ENDPOINT is not configured.",
+            "AI_GATEWAY_API_KEY is not configured.",
         },
         {
           status: 500,
@@ -92,16 +85,11 @@ export async function POST(
         ? body.prompt.trim()
         : "";
 
-    const image =
-      typeof body.image === "string"
-        ? body.image.trim()
-        : "";
-
-    if (!prompt && !image) {
+    if (!prompt) {
       return Response.json(
         {
           error:
-            "A prompt or source image is required.",
+            "A video prompt is required.",
         },
         {
           status: 400,
@@ -109,92 +97,33 @@ export async function POST(
       );
     }
 
-    const payload: {
-      prompt: string;
-      fps: number;
-      guidance_scale: number;
-      num_output_frames: number;
-      resolution: string;
-      steps: number;
-      seed: number;
-      image?: string;
-    } = {
-      prompt,
-      fps: 24,
-      guidance_scale: 6,
-      num_output_frames: 189,
-      resolution: "480",
-      steps: 35,
-      seed: Math.floor(
-        Math.random() * 1_000_000
-      ),
-    };
+    const { video } =
+      await generateVideo({
+        model:
+          process.env
+            .AI_GATEWAY_VIDEO_MODEL?.trim() ||
+          "alibaba/wan-v2.6-t2v",
 
-    if (image) {
-      payload.image = image;
-    }
+        prompt,
 
-    const response = await fetch(
-      endpoint,
-      {
-        method: "POST",
+        aspectRatio: "16:9",
 
-        headers: {
-          Authorization:
-            `Bearer ${apiKey}`,
-          Accept:
-            "application/json",
-          "Content-Type":
-            "application/json",
-        },
+        duration: 5,
 
-        body: JSON.stringify(
-          payload
-        ),
+        abortSignal:
+          AbortSignal.timeout(
+            240_000
+          ),
+      });
 
-        cache: "no-store",
-      }
-    );
+    const base64 =
+      video.base64;
 
-    let data: NvidiaVideoResponse = {};
-
-    try {
-      data =
-        (await response.json()) as NvidiaVideoResponse;
-    } catch {
-      data = {};
-    }
-
-    if (!response.ok) {
-      console.error(
-        "Aura NVIDIA video error:",
-        response.status,
-        data
-      );
-
+    if (!base64) {
       return Response.json(
         {
           error:
-            getErrorMessage(
-              response.status,
-              data
-            ),
-        },
-        {
-          status:
-            response.status >= 400 &&
-            response.status < 600
-              ? response.status
-              : 500,
-        }
-      );
-    }
-
-    if (!data.b64_video) {
-      return Response.json(
-        {
-          error:
-            "NVIDIA did not return video data.",
+            "The video model returned an empty video.",
         },
         {
           status: 500,
@@ -202,22 +131,22 @@ export async function POST(
       );
     }
 
+    const videoUrl =
+      `data:video/mp4;base64,${base64}`;
+
     return Response.json({
-      videoUrl:
-        `data:video/mp4;base64,${data.b64_video}`,
+      videoUrl,
     });
   } catch (error) {
     console.error(
-      "Aura video generation error:",
+      "Aura AI Gateway video error:",
       error
     );
 
     return Response.json(
       {
         error:
-          error instanceof Error
-            ? error.message
-            : "Aura could not generate the video.",
+          getErrorMessage(error),
       },
       {
         status: 500,

@@ -12,6 +12,7 @@
     "@anthropic-ai/sdk": "^0.116.0",
     "@google/genai": "^2.13.0",
     "@huggingface/inference": "^4.13.25",
+    "ai": "^7.0.58",
     "firebase": "^12.16.0",
     "lucide-react": "^1.26.0",
     "next": "16.2.11",
