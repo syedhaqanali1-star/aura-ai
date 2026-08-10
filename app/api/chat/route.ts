@@ -269,17 +269,7 @@ export async function POST(
               : 1024,
 
           stream: true,
-
-          ...(hasImages
-            ? {
-                extra_body: {
-                  chat_template_kwargs: {
-                    enable_thinking:
-                      false,
-                  },
-                },
-              }
-            : {}),
+          
         }
       );
 
