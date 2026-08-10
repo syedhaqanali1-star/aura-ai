@@ -274,6 +274,46 @@ function convertMessagesForApi(
     }));
 }
 
+function fileToDataUrl(
+  file: File
+): Promise<string> {
+  return new Promise(
+    (resolve, reject) => {
+      const reader =
+        new FileReader();
+
+      reader.onload = () => {
+        if (
+          typeof reader.result ===
+          "string"
+        ) {
+          resolve(
+            reader.result
+          );
+
+          return;
+        }
+
+        reject(
+          new Error(
+            "Aura could not read the uploaded image."
+          )
+        );
+      };
+
+      reader.onerror = () => {
+        reject(
+          new Error(
+            "Aura could not read the uploaded image."
+          )
+        );
+      };
+
+      reader.readAsDataURL(file);
+    }
+  );
+}
+
 /* =========================================================
    PROVIDER
 ========================================================= */
@@ -575,62 +615,69 @@ export function ChatProvider({
     );
 
   /* =======================================================
+     UPDATE ASSISTANT VIDEO
+  ======================================================= */
+
+  const updateAssistantVideo =
+    useCallback(
+      (
+        projectId: string,
+        conversationId: string,
+        messageId: string,
+        videoDataUrl: string
+      ) => {
+        if (
+          currentProjectIdRef.current !==
+          projectId
+        ) {
+          return;
+        }
+
+        const nextConversations =
+          conversationsRef.current.map(
+            (conversation) => {
+              if (
+                conversation.id !==
+                conversationId
+              ) {
+                return conversation;
+              }
+
+              return {
+                ...conversation,
+
+                messages:
+                  conversation.messages.map(
+                    (message) => {
+                      if (
+                        message.id !==
+                        messageId
+                      ) {
+                        return message;
+                      }
+
+                      return {
+                        ...message,
+                        videoDataUrl,
+                      };
+                    }
+                  ),
+              };
+            }
+          );
+
+        saveConversations(
+          nextConversations,
+          projectId
+        );
+      },
+      [saveConversations]
+    );
+
+  /* =======================================================
      UPDATE ASSISTANT IMAGE
   ======================================================= */
-  const updateAssistantVideo =
-  useCallback(
-    (
-      projectId: string,
-      conversationId: string,
-      messageId: string,
-      videoDataUrl: string
-    ) => {
-      if (
-        currentProjectIdRef.current !==
-        projectId
-      ) {
-        return;
-      }
 
-      const nextConversations =
-        conversationsRef.current.map(
-          (conversation) => {
-            if (
-              conversation.id !==
-              conversationId
-            ) {
-              return conversation;
-            }
-
-            return {
-              ...conversation,
-              messages:
-                conversation.messages.map(
-                  (message) => {
-                    if (
-                      message.id !==
-                      messageId
-                    ) {
-                      return message;
-                    }
-
-                    return {
-                      ...message,
-                      videoDataUrl,
-                    };
-                  }
-                ),
-            };
-          }
-        );
-
-      saveConversations(
-        nextConversations,
-        projectId
-      );
-    },
-    [saveConversations]
-  );
   const updateAssistantImage =
     useCallback(
       (
@@ -917,9 +964,27 @@ export function ChatProvider({
         const cleanedMessage =
           message.trim();
 
+        const imageFiles =
+          files.filter(
+            (file) =>
+              file.type.startsWith(
+                "image/"
+              )
+          );
+
+        /*
+         * This lets somebody upload an image
+         * without typing anything.
+         */
+        const effectiveMessage =
+          cleanedMessage ||
+          (imageFiles.length > 0
+            ? "What is in this image?"
+            : "");
+
         const intent =
           detectAuraIntent(
-            cleanedMessage,
+            effectiveMessage,
             files
           );
 
@@ -929,12 +994,13 @@ export function ChatProvider({
             intent,
 
             message:
-              cleanedMessage,
+              effectiveMessage,
 
             files: files.map(
               (file) => ({
                 name: file.name,
                 type: file.type,
+                size: file.size,
               })
             ),
           }
@@ -947,7 +1013,7 @@ export function ChatProvider({
           currentConversationIdRef.current;
 
         if (
-          !cleanedMessage ||
+          !effectiveMessage ||
           !projectId ||
           !conversationId ||
           isGenerating
@@ -970,7 +1036,7 @@ export function ChatProvider({
 
         const userMessage =
           createUserMessage(
-            cleanedMessage
+            effectiveMessage
           );
 
         const assistantMessage =
@@ -996,7 +1062,7 @@ export function ChatProvider({
             title:
               isFirstUserMessage
                 ? getConversationTitle(
-                    cleanedMessage
+                    effectiveMessage
                   )
                 : selectedConversation.title,
 
@@ -1060,7 +1126,7 @@ export function ChatProvider({
                   body:
                     JSON.stringify({
                       prompt:
-                        cleanedMessage,
+                        effectiveMessage,
                     }),
 
                   signal:
@@ -1126,7 +1192,7 @@ export function ChatProvider({
                   body:
                     JSON.stringify({
                       prompt:
-                        cleanedMessage,
+                        effectiveMessage,
                     }),
 
                   signal:
@@ -1144,18 +1210,21 @@ export function ChatProvider({
               );
             }
 
-            if (!data.videoUrl) {
+            if (
+              !data.videoUrl
+            ) {
               throw new Error(
                 "Aura did not receive a video from the video model."
               );
             }
 
-updateAssistantMessage(
-  projectId,
-  conversationId,
-  assistantMessage.id,
-  () => "Here’s the video I generated:"
-);
+            updateAssistantMessage(
+              projectId,
+              conversationId,
+              assistantMessage.id,
+              () =>
+                "Here’s the video I generated:"
+            );
 
             updateAssistantVideo(
               projectId,
@@ -1163,6 +1232,7 @@ updateAssistantMessage(
               assistantMessage.id,
               data.videoUrl
             );
+
             return;
           }
 
@@ -1171,7 +1241,8 @@ updateAssistantMessage(
           =============================================== */
 
           if (
-            intent === "image_edit"
+            intent ===
+            "image_edit"
           ) {
             updateAssistantMessage(
               projectId,
@@ -1185,8 +1256,15 @@ updateAssistantMessage(
           }
 
           /* ===============================================
-             NORMAL CHAT
+             NORMAL CHAT / IMAGE UNDERSTANDING
           =============================================== */
+
+          const imageDataUrls =
+            await Promise.all(
+              imageFiles.map(
+                fileToDataUrl
+              )
+            );
 
           const response =
             await fetch(
@@ -1203,6 +1281,9 @@ updateAssistantMessage(
                   JSON.stringify({
                     messages:
                       messagesForApi,
+
+                    images:
+                      imageDataUrls,
                   }),
 
                 signal:
@@ -1395,6 +1476,7 @@ updateAssistantMessage(
         saveConversations,
         updateAssistantImage,
         updateAssistantMessage,
+        updateAssistantVideo,
       ]
     );
 
