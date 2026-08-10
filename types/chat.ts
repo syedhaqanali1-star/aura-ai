@@ -2,6 +2,7 @@ export type ChatMessage = {
   id: string;
   role: "user" | "aura";
   text: string;
+  imageDataUrl?: string;
 };
 
 export type Conversation = {

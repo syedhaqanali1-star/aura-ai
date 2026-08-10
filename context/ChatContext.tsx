@@ -47,7 +47,10 @@ type ApiMessage = {
 type ApiErrorResponse = {
   error?: string;
 };
-
+type ImageApiResponse = {
+  imageDataUrl?: string;
+  error?: string;
+};
 const ChatContext =
   createContext<ChatContextType | null>(null);
 
@@ -85,6 +88,28 @@ function convertMessagesForApi(
           : "assistant",
       content: message.text.trim(),
     }));
+}
+
+function isImageGenerationRequest(message: string): boolean {
+  const normalized = message.toLowerCase().trim();
+
+  const imagePhrases = [
+    "generate an image",
+    "generate a photo",
+    "generate a picture",
+    "create an image",
+    "create a photo",
+    "create a picture",
+    "make an image",
+    "make a photo",
+    "make a picture",
+    "draw an image",
+    "draw a picture",
+  ];
+
+  return imagePhrases.some((phrase) =>
+    normalized.includes(phrase)
+  );
 }
 
 export function ChatProvider({
@@ -340,7 +365,61 @@ export function ChatProvider({
       },
       [saveConversations]
     );
+  const updateAssistantImage =
+  useCallback(
+    (
+      projectId: string,
+      conversationId: string,
+      messageId: string,
+      imageDataUrl: string
+    ) => {
+      if (
+        currentProjectIdRef.current !==
+        projectId
+      ) {
+        return;
+      }
 
+      const nextConversations =
+        conversationsRef.current.map(
+          (conversation) => {
+            if (
+              conversation.id !==
+              conversationId
+            ) {
+              return conversation;
+            }
+
+            return {
+              ...conversation,
+              messages:
+                conversation.messages.map(
+                  (message) => {
+                    if (
+                      message.id !==
+                      messageId
+                    ) {
+                      return message;
+                    }
+
+                    return {
+                      ...message,
+                      imageDataUrl,
+                    };
+                  }
+                ),
+            };
+          }
+        );
+
+      saveConversations(
+        nextConversations,
+        projectId
+      );
+    },
+    [saveConversations]
+  );
+  
   const removeMessage =
     useCallback(
       (
@@ -628,6 +707,59 @@ export function ChatProvider({
         setIsGenerating(true);
 
         try {
+          if (
+            isImageGenerationRequest(
+              cleanedMessage
+            )
+          ) {
+            const response = await fetch(
+              "/api/image",
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type":
+                    "application/json",
+                },
+                body: JSON.stringify({
+                  prompt: cleanedMessage,
+                }),
+                signal: controller.signal,
+              }
+            );
+
+            const data =
+              (await response.json()) as ImageApiResponse;
+
+            if (!response.ok) {
+              throw new Error(
+                data.error ||
+                  "Aura could not generate the image."
+              );
+            }
+
+            if (!data.imageDataUrl) {
+              throw new Error(
+                "Aura did not receive an image from Gemini."
+              );
+            }
+
+            updateAssistantMessage(
+              projectId,
+              conversationId,
+              assistantMessage.id,
+              () => "Here’s the image I generated:"
+            );
+
+            updateAssistantImage(
+              projectId,
+              conversationId,
+              assistantMessage.id,
+              data.imageDataUrl
+            );
+
+            return;
+          }
+
           const response = await fetch(
             "/api/chat",
             {
@@ -797,6 +929,7 @@ export function ChatProvider({
         isGenerating,
         removeMessage,
         saveConversations,
+        updateAssistantImage,
         updateAssistantMessage,
       ]
     );
